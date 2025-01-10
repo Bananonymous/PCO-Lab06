@@ -286,7 +286,7 @@ TEST_F(ThreadpoolTest, testCase3)
 
     // Check that every runnable is really finished
     for (const auto& [key, value] : m_runningState) {
-        EXPECT_EQ(value, false) << "Failed";
+        EXPECT_EQ(value, false) << "Failed thread returned running";
     }
 
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(endingTime - startingTime).count(), (10 * RUNTIMEINMS + 300)) << "Too long execution time";
@@ -395,6 +395,108 @@ TEST_F(ThreadpoolTest, testCase5)
         EXPECT_EQ(value, false) << "Failed";
     }
 }
+
+TEST_F(ThreadpoolTest, testConcurrentStart) {
+    ThreadPool pool(10, 20, std::chrono::milliseconds{100});
+    std::vector<std::unique_ptr<PcoThread>> threads;
+    constexpr int taskCount = 50;
+
+    for (int i = 0; i < taskCount; i++) {
+        threads.push_back(std::make_unique<PcoThread>([&pool, i, this]() {
+            std::string id = "Task_" + std::to_string(i);
+            auto runnable = std::make_unique<TestRunnable>(this, id);
+            pool.start(std::move(runnable));
+        }));
+    }
+
+    for (auto &thread : threads) {
+        thread->join();
+    }
+
+    PcoThread::usleep(200000); // 200 ms
+
+    // Vérifie que toutes les tâches sont terminées
+    for (const auto& [key, value] : m_runningState) {
+        EXPECT_EQ(value, false);
+    }
+}
+
+TEST_F(ThreadpoolTest, testStress) {
+    ThreadPool pool(20, 100, std::chrono::milliseconds{100});
+    constexpr int taskCount = 5000;
+
+    for (int i = 0; i < taskCount; i++) {
+        std::string id = "Task_" + std::to_string(i);
+        auto runnable = std::make_unique<TestRunnable>(this, id);
+        pool.start(std::move(runnable));
+    }
+
+    PcoThread::usleep(1000000); // 5 secondes pour laisser le pool traiter
+
+    // Vérifie que toutes les tâches sont terminées
+    for (const auto& [key, value] : m_runningState) {
+        EXPECT_EQ(value, false);
+    }
+}
+
+
+TEST_F(ThreadpoolTest, testInvalidParameters) {
+    // Vérifie qu'aucune tâche ne peut être ajoutée si le pool est initialisé avec 0 threads
+    ThreadPool pool(0, 10, std::chrono::milliseconds{100});
+    auto runnable = std::make_unique<TestRunnable>(this, "InvalidThreadPool");
+    EXPECT_FALSE(pool.start(std::move(runnable)));
+
+    // Vérifie qu'une tâche est annulée si maxNbWaiting est 0
+    ThreadPool pool2(5, 0, std::chrono::milliseconds{100});
+    auto runnable2 = std::make_unique<TestRunnable>(this, "NoQueue");
+    EXPECT_FALSE(pool2.start(std::move(runnable2)));
+}
+
+TEST_F(ThreadpoolTest, testPerformance) {
+    constexpr int threadCounts[] = {5, 10, 20};
+    constexpr int taskCounts[] = {100, 500, 1000};
+
+    for (int threads : threadCounts) {
+        for (int tasks : taskCounts) {
+            ThreadPool pool(threads, tasks, std::chrono::milliseconds{100});
+            auto start = std::chrono::high_resolution_clock::now();
+
+            for (int i = 0; i < tasks; i++) {
+                std::string id = "PerfTask_" + std::to_string(i);
+                auto runnable = std::make_unique<TestRunnable>(this, id);
+                pool.start(std::move(runnable));
+            }
+
+            PcoThread::usleep(5000000); // 5 secondes pour laisser le pool traiter
+
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            logger() << "[PERFORMANCE] Threads: " << threads << ", Tasks: " << tasks
+                     << ", Time: " << duration << "ms\n";
+
+            // Vérifie que toutes les tâches sont terminées
+            for (const auto& [key, value] : m_runningState) {
+                EXPECT_EQ(value, false);
+            }
+        }
+    }
+}
+
+TEST_F(ThreadpoolTest, testDynamicIdleTimeout) {
+    ThreadPool pool(10, 100, std::chrono::milliseconds{100});
+
+    for (int i = 0; i < 10; i++) {
+        std::string id = "Task_" + std::to_string(i);
+        auto runnable = std::make_unique<TestRunnable>(this, id, 1000000); // 1 seconde
+        pool.start(std::move(runnable));
+    }
+
+    PcoThread::usleep(2000000); // 2 secondes
+
+    // Vérifie que les threads sont supprimés après l'inactivité
+    EXPECT_EQ(pool.currentNbThreads(), 0);
+}
+
 
 
 int main(int argc, char **argv) {
