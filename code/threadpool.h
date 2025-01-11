@@ -1,3 +1,11 @@
+/**
+ * @file threadpool.h
+ * @brief Header file defining the ThreadPool class, which manages a pool of worker threads to execute tasks.
+ * @authors
+ * - Nicolet Victor
+ * - Surbeck Léon
+ */
+
 #ifndef THREADPOOL_H
 #define THREADPOOL_H
 
@@ -15,20 +23,46 @@
 
 #include "threadInfo.h" // Include the ThreadInfo class
 
+/**
+ * @brief Abstract base class representing a runnable task.
+ * Defines the interface for tasks that can be executed by the ThreadPool.
+ */
 class Runnable {
 public:
     virtual ~Runnable() = default;
 
+    /**
+     * @brief Execute the task.
+     */
     virtual void run() = 0;
+
+    /**
+     * @brief Cancel the task.
+     * Called when the task cannot be executed (e.g., due to queue overflow).
+     */
     virtual void cancelRun() = 0;
+
+    /**
+     * @brief Get the unique identifier for the task.
+     * @return A string representing the task ID.
+     */
     virtual std::string id() = 0;
 };
 
+/**
+ * @brief The ThreadPool class
+ * Manages a fixed number of worker threads to execute submitted tasks concurrently.
+ */
 class ThreadPool : public PcoHoareMonitor {
 public:
-    ThreadPool(int maxThreadCount,
-               int maxNbWaiting,
-               std::chrono::milliseconds idleTimeout)
+    /**
+     * @brief Constructor
+     * @param maxThreadCount Maximum number of worker threads in the pool
+     * @param maxNbWaiting Maximum number of tasks allowed in the queue
+     * @param idleTimeout Duration before idle threads terminate
+     * @throws std::invalid_argument if parameters are invalid
+     */
+    ThreadPool(int maxThreadCount, int maxNbWaiting, std::chrono::milliseconds idleTimeout)
         : maxThreadCount(maxThreadCount),
           maxNbWaiting(maxNbWaiting),
           idleThreads(0),
@@ -45,13 +79,19 @@ public:
         }
     }
 
+    /**
+     * @brief Destructor
+     * Gracefully shuts down the thread pool and releases resources.
+     */
     ~ThreadPool() {
         shutdown();
     }
 
-    // The main function used by a worker to fetch and run tasks
-    bool taskRunner()
-    {
+    /**
+     * @brief Fetches and executes a task from the queue.
+     * @return True if a task was executed, false otherwise.
+     */
+    bool taskRunner() {
         monitorIn();
 
         if (isShuttingDown) {
@@ -65,9 +105,12 @@ public:
             waitingTasks.pop();
             monitorOut(); // Release the monitor while running a task
 
-            if (task) {
-                task->run();
+            try {
+                if (task) task->run();
                 return true;
+            } catch (const std::exception& e) {
+                logger() << "[ERROR] Task execution failed: " << e.what() << "\n";
+                return false;
             }
         } else {
             // No tasks -> the thread becomes idle
@@ -80,9 +123,12 @@ public:
         return false;
     }
 
-    // Start a runnable task
-    bool start(std::unique_ptr<Runnable> runnable)
-    {
+    /**
+     * @brief Starts a runnable task.
+     * @param runnable The task to be executed.
+     * @return True if the task was successfully started, false otherwise.
+     */
+    bool start(std::unique_ptr<Runnable> runnable) {
         monitorIn();
 
         // If shutting down, refuse new tasks
@@ -93,8 +139,6 @@ public:
 
         // Add this new task to the queue
         waitingTasks.push(std::move(runnable));
-
-        // std::cout << currentNbThreads() << " / " << maxThreadCount << " / " << idleThreads << " / " << waitingTasks.size() <<  std::endl;
 
         // If we have idle threads, wake one up
         if (idleThreads > 0) {
@@ -112,7 +156,6 @@ public:
         }
         // Otherwise, we've exceeded our limit and remove the task
         else {
-            // std::cout << "Trashing task" << std::endl;
             waitingTasks.front()->cancelRun();
             waitingTasks.pop();
             monitorOut();
@@ -123,9 +166,11 @@ public:
         return true;
     }
 
-    // Returns the number of currently running threads
-    size_t currentNbThreads()
-    {
+    /**
+     * @brief Returns the number of currently running threads.
+     * @return The count of running threads.
+     */
+    size_t currentNbThreads() {
         return std::count_if(threadPool.begin(), threadPool.end(),
                              [](const auto &threadInfo) {
                                  return threadInfo->isThreadRunning();
@@ -133,27 +178,25 @@ public:
     }
 
 private:
-    size_t maxThreadCount;
-    size_t maxNbWaiting;
-    size_t idleThreads;
-    std::chrono::milliseconds idleTimeout;
+    size_t maxThreadCount;                      // Maximum number of worker threads
+    size_t maxNbWaiting;                        // Maximum number of waiting tasks in the queue
+    size_t idleThreads;                         // Current number of idle threads
+    std::chrono::milliseconds idleTimeout;      // Duration before idle threads terminate
+    size_t nbTasksWaitingForThreads = 0;        // Number of tasks waiting for threads
+    std::queue<std::unique_ptr<Runnable>> waitingTasks; // Queue of waiting tasks
+    std::vector<std::unique_ptr<ThreadInfo>> threadPool; // Pool of worker threads
+    Condition condTaskAvailable;                // Condition for available tasks
+    Condition waitForThread;                    // Condition for waiting threads
+    bool isShuttingDown;                        // Indicates if the pool is shutting down
 
-    size_t nbTasksWaitingForThreads;
-
-    std::queue<std::unique_ptr<Runnable>> waitingTasks;
-    std::vector<std::unique_ptr<ThreadInfo>> threadPool;
-
-    Condition condTaskAvailable;
-    Condition waitForThread;
-    bool isShuttingDown;
-
-    // Create a new thread in the pool
-    void createThread()
-    {
+    /**
+     * @brief Creates a new worker thread in the pool.
+     */
+    void createThread() {
         static int threadCounter = 0;
         auto threadId = "Thread-" + std::to_string(++threadCounter);
 
-        // Pass `this` as a raw pointer to the ThreadInfo so it can call pool->taskFetcher()
+        // Create a new thread and start its execution loop
         threadPool.emplace_back(std::make_unique<ThreadInfo>(
             threadId,
             this, // 'this' is the pointer to the current ThreadPool
@@ -162,9 +205,10 @@ private:
         threadPool.back()->start();
     }
 
-    // Gracefully shuts down the thread pool
-    void shutdown()
-    {
+    /**
+     * @brief Gracefully shuts down the thread pool.
+     */
+    void shutdown() {
         isShuttingDown = true;
 
         // Wake up all threads so they can exit
@@ -173,15 +217,13 @@ private:
             signal(waitForThread);
         }
 
-        // Once we leave the monitor, the ~ThreadInfo will join worker threads
-        // when we clear the vector
+        // Clear all threads and join them
         threadPool.clear();
 
         // Clear out any remaining tasks
         while (!waitingTasks.empty()) {
             waitingTasks.pop();
         }
-
     }
 };
 

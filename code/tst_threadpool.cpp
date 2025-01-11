@@ -1,4 +1,10 @@
-
+/**
+* @file tst_threadpool.cpp
+ * @brief Unit tests for the ThreadPool class, covering various concurrency scenarios.
+ * @authors
+ * - Nicolet Victor
+ * - Surbeck Léon
+ */
 #include <chrono>
 
 #include <gtest/gtest.h>
@@ -43,7 +49,7 @@ public:
         mutex.unlock();
         // Only a single access, no need to protect it
         m_runningState[id] = false;
-    }    
+    }
 
     /// \brief m_runningState A map to represent the running state of the Runnables
     /// True : running. False : not running
@@ -174,7 +180,9 @@ typedef struct {
     ThreadpoolTest *test;
 } ThreadParameter;
 
-
+/**
+ * @brief Launches a Runnable in a new thread within the ThreadPool.
+ */
 void startInThread(ThreadParameter *param) {
 
     auto id = param->runnable->id();
