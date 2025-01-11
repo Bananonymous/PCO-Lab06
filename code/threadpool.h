@@ -33,8 +33,17 @@ public:
           maxNbWaiting(maxNbWaiting),
           idleThreads(0),
           idleTimeout(idleTimeout),
-          isShuttingDown(false)
-    {}
+          isShuttingDown(false) {
+        if (maxThreadCount <= 0) {
+            throw std::invalid_argument("maxThreadCount must be greater than 0");
+        }
+        if (maxNbWaiting < 0) {
+            throw std::invalid_argument("maxNbWaiting cannot be negative");
+        }
+        if (idleTimeout.count() < 0) {
+            throw std::invalid_argument("idleTimeout must be non-negative");
+        }
+    }
 
     ~ThreadPool() {
         shutdown();

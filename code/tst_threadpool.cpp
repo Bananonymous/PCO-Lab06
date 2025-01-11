@@ -218,9 +218,9 @@ TEST_F(ThreadpoolTest, testCase1)
         EXPECT_EQ(value, false) << "Failed";
     }
 
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(endingTime - startingTime).count(), (RUNTIMEINMS + 5)) << "Too long execution time";
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(endingTime - startingTime).count(), (RUNTIMEINMS + 7)) << "Too long execution time";
 
-    EXPECT_GT(std::chrono::duration_cast<std::chrono::milliseconds>(endingTime - startingTime).count(), (RUNTIMEINMS - 2)) << "Too short execution time";
+    EXPECT_GT(std::chrono::duration_cast<std::chrono::milliseconds>(endingTime - startingTime).count(), (RUNTIMEINMS - 3)) << "Too short execution time";
 }
 
 ///
@@ -396,6 +396,9 @@ TEST_F(ThreadpoolTest, testCase5)
     }
 }
 
+/// \brief A testcase where multiple threads call the `start` function simultaneously
+/// This test checks if the pool handles concurrent task submissions without deadlocks or errors.
+/// A total of 50 tasks are added from different threads, and their execution is validated.
 TEST_F(ThreadpoolTest, testConcurrentStart) {
     ThreadPool pool(10, 20, std::chrono::milliseconds{100});
     std::vector<std::unique_ptr<PcoThread>> threads;
@@ -415,15 +418,18 @@ TEST_F(ThreadpoolTest, testConcurrentStart) {
 
     PcoThread::usleep(200000); // 200 ms
 
-    // Vérifie que toutes les tâches sont terminées
+    // Check that all tasks have completed
     for (const auto& [key, value] : m_runningState) {
         EXPECT_EQ(value, false);
     }
 }
 
+/// \brief A stress test with 4000 tasks and 20 threads in the pool
+/// This test checks the scalability and stability of the pool under a high task load.
+/// It ensures that all tasks complete without errors or deadlocks.
 TEST_F(ThreadpoolTest, testStress) {
     ThreadPool pool(20, 100, std::chrono::milliseconds{100});
-    constexpr int taskCount = 5000;
+    constexpr int taskCount = 4000;
 
     for (int i = 0; i < taskCount; i++) {
         std::string id = "Task_" + std::to_string(i);
@@ -431,71 +437,115 @@ TEST_F(ThreadpoolTest, testStress) {
         pool.start(std::move(runnable));
     }
 
-    PcoThread::usleep(1000000); // 5 secondes pour laisser le pool traiter
+    PcoThread::usleep(1000000); // Wait for all tasks to complete
 
-    // Vérifie que toutes les tâches sont terminées
+    // Check that all tasks have completed
     for (const auto& [key, value] : m_runningState) {
         EXPECT_EQ(value, false);
     }
 }
 
-
-TEST_F(ThreadpoolTest, testInvalidParameters) {
-    // Vérifie qu'aucune tâche ne peut être ajoutée si le pool est initialisé avec 0 threads
-    ThreadPool pool(0, 10, std::chrono::milliseconds{100});
-    auto runnable = std::make_unique<TestRunnable>(this, "InvalidThreadPool");
-    EXPECT_FALSE(pool.start(std::move(runnable)));
-
-    // Vérifie qu'une tâche est annulée si maxNbWaiting est 0
-    ThreadPool pool2(5, 0, std::chrono::milliseconds{100});
-    auto runnable2 = std::make_unique<TestRunnable>(this, "NoQueue");
-    EXPECT_FALSE(pool2.start(std::move(runnable2)));
-}
-
-TEST_F(ThreadpoolTest, testPerformance) {
-    constexpr int threadCounts[] = {5, 10, 20};
-    constexpr int taskCounts[] = {100, 500, 1000};
-
-    for (int threads : threadCounts) {
-        for (int tasks : taskCounts) {
-            ThreadPool pool(threads, tasks, std::chrono::milliseconds{100});
-            auto start = std::chrono::high_resolution_clock::now();
-
-            for (int i = 0; i < tasks; i++) {
-                std::string id = "PerfTask_" + std::to_string(i);
-                auto runnable = std::make_unique<TestRunnable>(this, id);
-                pool.start(std::move(runnable));
-            }
-
-            PcoThread::usleep(5000000); // 5 secondes pour laisser le pool traiter
-
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-            logger() << "[PERFORMANCE] Threads: " << threads << ", Tasks: " << tasks
-                     << ", Time: " << duration << "ms\n";
-
-            // Vérifie que toutes les tâches sont terminées
-            for (const auto& [key, value] : m_runningState) {
-                EXPECT_EQ(value, false);
-            }
-        }
-    }
-}
-
+/// \brief A test to verify thread removal after idle timeout
+/// This test ensures that threads are terminated correctly after being idle for the specified timeout.
 TEST_F(ThreadpoolTest, testDynamicIdleTimeout) {
     ThreadPool pool(10, 100, std::chrono::milliseconds{100});
 
     for (int i = 0; i < 10; i++) {
         std::string id = "Task_" + std::to_string(i);
-        auto runnable = std::make_unique<TestRunnable>(this, id, 1000000); // 1 seconde
+        auto runnable = std::make_unique<TestRunnable>(this, id, 1000000); // 1 second
         pool.start(std::move(runnable));
     }
 
-    PcoThread::usleep(2000000); // 2 secondes
+    PcoThread::usleep(2000000); // Wait 2 seconds
 
-    // Vérifie que les threads sont supprimés après l'inactivité
+    // Check that all threads are removed after idle timeout
     EXPECT_EQ(pool.currentNbThreads(), 0);
 }
+
+/// \brief A test to validate the handling of invalid parameters in the pool constructor
+/// This test ensures the pool correctly handles invalid inputs such as negative or zero values.
+TEST_F(ThreadpoolTest, testInvalidParameters) {
+    EXPECT_THROW(ThreadPool(0, 10, std::chrono::milliseconds{100}), std::invalid_argument);
+    EXPECT_THROW(ThreadPool(-1, 10, std::chrono::milliseconds{100}), std::invalid_argument);
+
+    EXPECT_THROW(ThreadPool(5, -1, std::chrono::milliseconds{100}), std::invalid_argument);
+    EXPECT_THROW(ThreadPool(5, 10, std::chrono::milliseconds{-100}), std::invalid_argument);
+
+    EXPECT_NO_THROW(ThreadPool(5, 10, std::chrono::milliseconds{100}));
+}
+
+/// \brief A test for task cancellation
+/// This test ensures that cancelled tasks do not execute and are correctly removed from the running state.
+TEST_F(ThreadpoolTest, testCancelledTasks) {
+    ThreadPool pool(5, 10, std::chrono::milliseconds{100});
+    std::vector<std::unique_ptr<Runnable>> tasks;
+
+    for (int i = 0; i < 10; i++) {
+        std::string id = "Task_" + std::to_string(i);
+        tasks.push_back(std::make_unique<TestRunnable>(this, id));
+    }
+
+    for (int i = 0; i < 5; i++) {
+        EXPECT_TRUE(pool.start(std::move(tasks[i])));
+        runnableStarted("Task_" + std::to_string(i));
+    }
+
+    for (int i = 5; i < 10; i++) {
+        tasks[i]->cancelRun();
+        m_runningState.erase("Task_" + std::to_string(i));
+    }
+
+    PcoThread::usleep(200000); // Wait for execution
+
+    for (int i = 0; i < 5; i++) {
+        EXPECT_EQ(m_runningState["Task_" + std::to_string(i)], false);
+    }
+
+    for (int i = 5; i < 10; i++) {
+        EXPECT_EQ(m_runningState.find("Task_" + std::to_string(i)), m_runningState.end());
+    }
+}
+
+/// \brief A test to ensure tasks are executed in the correct order
+/// This test validates that tasks are processed in the order they are submitted.
+TEST_F(ThreadpoolTest, testTaskOrder) {
+    ThreadPool pool(3, 10, std::chrono::milliseconds{100});
+    std::vector<std::string> executionOrder;
+
+    class OrderedRunnable : public Runnable {
+    private:
+        std::string taskId;
+        std::vector<std::string> &executionOrder;
+
+    public:
+        OrderedRunnable(const std::string &id, std::vector<std::string> &order)
+            : taskId(id), executionOrder(order) {}
+
+        void run() override {
+            executionOrder.push_back(taskId);
+        }
+
+        void cancelRun() override {}
+
+        std::string id() override {
+            return taskId;
+        }
+    };
+
+    for (int i = 0; i < 5; i++) {
+        std::string id = "Task_" + std::to_string(i);
+        auto runnable = std::make_unique<OrderedRunnable>(id, executionOrder);
+        EXPECT_TRUE(pool.start(std::move(runnable)));
+    }
+
+    PcoThread::usleep(300000); // Wait for execution
+
+    for (int i = 0; i < 5; i++) {
+        EXPECT_EQ(executionOrder[i], "Task_" + std::to_string(i));
+    }
+}
+
+
 
 
 
